@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Whirl – Randolf's Assistant</title>
+  <style>
+    :root {
+      --bg: #121214;
+      --surface: #1a1a1e;
+      --card: #222228;
+      --border: #32323a;
+      --text-main: #ffffff;
+      --text-muted: #9e9ea7;
+      --white-glow: rgba(255, 255, 255, 0.85);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background-color: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--surface);
+    }
+
+    .brand-title {
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-main);
+    }
+
+    .brand-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    #main-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.5rem;
+      overflow-y: auto;
+    }
+
+    /* Hero section with Headline and ORB */
+    #hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      margin-top: 1rem;
+      max-width: 680px;
+    }
+
+    .hero-text {
+      font-size: 1.6rem;
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--text-main);
+      margin-bottom: 2rem;
+      letter-spacing: -0.02em;
+    }
+
+    /* Animated ORB */
+    .orb-wrapper {
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 2rem;
+      cursor: pointer;
+    }
+
+    .orb {
+      width: 130px;
+      height: 130px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #ffffff 0%, #d4d4d8 25%, #71717a 55%, #27272a 80%, #09090b 100%);
+      box-shadow: 0 0 35px rgba(255, 255, 255, 0.25), inset 0 0 25px rgba(255, 255, 255, 0.4);
+      animation: orb-idle 4s ease-in-out infinite alternate;
+      transition: all 0.3s ease;
+    }
+
+    /* Idle animation */
+    @keyframes orb-idle {
+      0% {
+        transform: scale(1) translateY(0);
+        box-shadow: 0 0 30px rgba(255, 255, 255, 0.2), inset 0 0 20px rgba(255, 255, 255, 0.3);
+      }
+      100% {
+        transform: scale(1.05) translateY(-6px);
+        box-shadow: 0 0 45px rgba(255, 255, 255, 0.35), inset 0 0 30px rgba(255, 255, 255, 0.5);
+      }
+    }
+
+    /* Speaking active animation (bright ripple & pulsing) */
+    .orb.speaking {
+      animation: orb-speak 1s infinite ease-in-out alternate;
+    }
+
+    @keyframes orb-speak {
+      0% {
+        transform: scale(1.08);
+        box-shadow: 0 0 50px rgba(255, 255, 255, 0.7), 0 0 90px rgba(255, 255, 255, 0.3), inset 0 0 35px #ffffff;
+      }
+      100% {
+        transform: scale(1.22);
+        box-shadow: 0 0 80px rgba(255, 255, 255, 0.95), 0 0 130px rgba(255, 255, 255, 0.5), inset 0 0 45px #ffffff;
+      }
+    }
+
+    /* Recording / Listening State */
+    .orb.recording {
+      background: radial-gradient(circle at 35% 35%, #ffffff 0%, #fca5a5 25%, #ef4444 60%, #991b1b 100%);
+      animation: orb-record 0.8s infinite alternate;
+      box-shadow: 0 0 50px rgba(239, 68, 68, 0.8);
+    }
+
+    @keyframes orb-record {
+      from { transform: scale(1.02); }
+      to { transform: scale(1.15); }
+    }
+
+    /* Chat log */
+    #chat-box {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    .bubble {
+      max-width: 85%;
+      padding: 12px 18px;
+      border-radius: 16px;
+      line-height: 1.5;
+      font-size: 0.95rem;
+    }
+
+    .agent {
+      align-self: flex-start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+    }
+
+    .user {
+      align-self: flex-end;
+      background: #ffffff;
+      color: #121214;
+      font-weight: 500;
+    }
+
+    /* Controls bar */
+    #controls {
+      padding: 1rem 1.5rem;
+      display: flex;
+      gap: 0.6rem;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      justify-content: center;
+      align-items: center;
+    }
+
+    .controls-inner {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      gap: 0.6rem;
+    }
+
+    input {
+      flex: 1;
+      padding: 14px 18px;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text-main);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      border-color: #71717a;
+    }
+
+    button {
+      padding: 14px 22px;
+      border-radius: 9999px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: #121214;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      background: #e4e4e7;
+    }
+
+    #mic-btn.recording {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #ffffff;
+    }
+
+    #interrupt-btn {
+      background: #27272a;
+      color: #ffffff;
+      border-color: #3f3f46;
+      display: none;
+    }
+
+    #interrupt-btn:hover {
+      background: #3f3f46;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <div class="brand-title">WHIRL</div>
+      <div class="brand-subtitle">Personal Voice Agent of Randolf Alt</div>
+    </div>
+    <div style="font-size: 0.8rem; color: var(--text-muted); border: 1px solid var(--border); padding: 4px 10px; border-radius: 999px;">
+      EBS Finance & Accounting
+    </div>
+  </header>
+
+  <div id="main-container">
+    <div id="hero">
+      <div class="hero-text">
+        Hi, I am Whirl. Personal assistant of Randolf, what would you like to know about him?
+      </div>
+
+      <div class="orb-wrapper" onclick="handleOrbClick()" title="Click Orb to speak or interrupt">
+        <div id="whirl-orb" class="orb"></div>
+      </div>
+    </div>
+
+    <div id="chat-box"></div>
+  </div>
+
+  <div id="controls">
+    <div class="controls-inner">
+      <button id="interrupt-btn" type="button" onclick="stopWhirl()">⏹️ Interrupt</button>
+      <button id="mic-btn" type="button" onclick="toggleVoice()">🎙️ Speak</button>
+      <input type="text" id="user-input" placeholder="Type or click Speak..."/>
+      <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById("chat-box");
+    const input = document.getElementById("user-input");
+    const micBtn = document.getElementById("mic-btn");
+    const interruptBtn = document.getElementById("interrupt-btn");
+    const orb = document.getElementById("whirl-orb");
+
+    let conversationHistory = [];
+    let currentAudio = null;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+
+    function stopWhirl() {
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+      }
+      orb.classList.remove("speaking");
+      interruptBtn.style.display = "none";
+    }
+
+    function handleOrbClick() {
+      if (currentAudio && !currentAudio.paused) {
+        stopWhirl();
+      } else {
+        toggleVoice();
+      }
+    }
+
+    async function toggleVoice() {
+      stopWhirl();
+
+      if (isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        orb.classList.remove("recording");
+        micBtn.classList.remove("recording");
+        micBtn.innerText = "⏳ Processing...";
+        micBtn.disabled = true;
+      } else {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+          mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+          mediaRecorder.onstop = async () => {
+            const blob = new Blob(audioChunks, { type: "audio/webm" });
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = async () => {
+              const base64Audio = reader.result.split(",")[1];
+              try {
+                const res = await fetch("/transcribe", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ audio_base64: base64Audio })
+                });
+                const data = await res.json();
+                if (data.text && data.text.trim()) {
+                  sendMessage(data.text.trim());
+                }
+              } catch(e) {
+                console.error("Transcription error:", e);
+              } finally {
+                micBtn.innerText = "🎙️ Speak";
+                micBtn.disabled = false;
+              }
+            };
+          };
+          mediaRecorder.start();
+          isRecording = true;
+          orb.classList.add("recording");
+          micBtn.classList.add("recording");
+          micBtn.innerText = "⏹️ Done";
+        } catch(err) {
+          alert("Microphone permission needed.");
+        }
+      }
+    }
+
+    async function sendMessage(text) {
+      stopWhirl();
+      const msg = text || input.value.trim();
+      if (!msg) return;
+
+      appendBubble(msg, "user");
+      input.value = "";
+      const typing = appendBubble("Whirl is thinking...", "agent");
+
+      try {
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg, history: conversationHistory })
+        });
+        const data = await res.json();
+        typing.remove();
+        appendBubble(data.reply, "agent");
+
+        // Play audio & animate glowing Orb
+        currentAudio = new Audio(data.audio);
+        orb.classList.add("speaking");
+        interruptBtn.style.display = "block";
+
+        currentAudio.onended = () => {
+          orb.classList.remove("speaking");
+          interruptBtn.style.display = "none";
+        };
+
+        currentAudio.play();
+
+        conversationHistory.push({ role: "user", content: msg });
+        conversationHistory.push({ role: "assistant", content: data.reply });
+      } catch (e) {
+        typing.innerText = "Error answering. Please try again.";
+        orb.classList.remove("speaking");
+      }
+    }
+
+    function appendBubble(text, sender) {
+      const b = document.createElement("div");
+      b.className = `bubble ${sender}`;
+      b.innerText = text;
+      chatBox.appendChild(b);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return b;
+    }
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+  </script>
+</body>
+</html>
