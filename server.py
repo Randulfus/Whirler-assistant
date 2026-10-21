@@ -78,13 +78,16 @@ SUPPORTED_LANGS = ("en", "et")
 
 # ---------- AI models ----------
 # Main brain: Google Gemini (free tier from Google AI Studio), strong in both English and Estonian.
-GEMINI_MODEL = "gemini-3.8-flash"
+# Tried in this order. 3.8 Flash is often overloaded on the free tier ("high demand"),
+# so the stable previous Flash goes first; each gets a short time limit.
+GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"]
+GEMINI_MODEL = GEMINI_MODELS[0]
 gemini_key_raw = os.getenv("GEMINI_API_KEY", "")
 gemini_key = gemini_key_raw.strip()  # ignore stray spaces from copy-paste
 gemini = OpenAI(
     api_key=gemini_key,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    timeout=25,      # never wait longer than this; Groq takes over instead
+    timeout=12,      # per model; if Google is busy we move on instead of waiting
     max_retries=0,
 ) if gemini_key else None
 
@@ -176,46 +179,48 @@ def extract_whisper_language(transcription) -> Optional[str]:
 
 
 def generate_reply(messages: list, lang: str) -> tuple[str, str]:
-    """Ask Gemini first; fall back to Groq if Gemini is missing or fails. Returns (text, model used)."""
+    """Try the Gemini models in order, then Groq. Returns (text, model used)."""
     if gemini:
-        try:
+        for model in GEMINI_MODELS:
             t0 = time.perf_counter()
-            completion = gemini.chat.completions.create(
-                model=GEMINI_MODEL,
-                messages=messages,
-                # Google: keep Gemini 3 at its default temperature (1.0);
-                # lower values can make it loop and never finish.
-                # Same thinking level as the AI Studio test that answered well.
-                reasoning_effort="medium",
-                # Gemini counts its thinking in this limit too, so it is set high;
-                # the replies themselves stay 1-3 sentences because of the prompt.
-                max_tokens=4096,
-            )
-            text = (completion.choices[0].message.content or "").strip()
-            print(f"gemini answered in {round((time.perf_counter() - t0) * 1000)} ms", flush=True)
-            if text:
-                return text, GEMINI_MODEL
-        except Exception as e:
-            print(f"Gemini failed, using Groq backup: {e!r}", flush=True)
+            try:
+                completion = gemini.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    # Google: keep Gemini 3 at its default temperature (1.0);
+                    # lower values can make it loop and never finish.
+                    # Same thinking level as the AI Studio test that answered well.
+                    reasoning_effort="medium",
+                    # Gemini counts its thinking in this limit too, so it is set high;
+                    # the replies themselves stay 1-3 sentences because of the prompt.
+                    max_tokens=4096,
+                )
+                text = (completion.choices[0].message.content or "").strip()
+                print(f"{model} answered in {_ms(t0)} ms", flush=True)
+                if text:
+                    return text, model
+            except Exception as e:
+                print(f"{model} failed after {_ms(t0)} ms: {str(e)[:160]!r}", flush=True)
 
+    t0 = time.perf_counter()
     completion = client.chat.completions.create(
         model=BACKUP_MODELS[lang],
         messages=messages,
         temperature=0.7,
         max_tokens=800,
     )
+    print(f"groq backup answered in {_ms(t0)} ms", flush=True)
     return (completion.choices[0].message.content or "").strip(), BACKUP_MODELS[lang]
 
-
-# ---------- Startup self-test (diagnostics only, writes timings to the log) ----------
 
 def _ms(t0: float) -> int:
     return round((time.perf_counter() - t0) * 1000)
 
 
+# ---------- Startup self-test (diagnostics only, writes timings to the log) ----------
+
 def _selftest_gemini() -> None:
     import socket
-    import httpx
 
     key = gemini_key.strip()
     print(f"selftest: GEMINI_API_KEY set={bool(key)} length={len(key)} "
@@ -230,30 +235,17 @@ def _selftest_gemini() -> None:
     except Exception as e:
         print(f"selftest: DNS google FAILED {e!r}", flush=True)
 
-    # 1) Google's own API, tiny question, low thinking
-    t0 = time.perf_counter()
-    try:
-        r = httpx.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            headers={"x-goog-api-key": key},
-            json={"contents": [{"parts": [{"text": "Ütle ainult: tere"}]}],
-                  "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"}}},
-            timeout=40,
-        )
-        print(f"selftest: native API status={r.status_code} in {_ms(t0)} ms body={r.text[:300]!r}", flush=True)
-    except Exception as e:
-        print(f"selftest: native API FAILED after {_ms(t0)} ms {e!r}", flush=True)
-
-    # 2) The OpenAI-compatible route the chat uses
-    t0 = time.perf_counter()
-    try:
-        c = OpenAI(api_key=key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                   timeout=40, max_retries=0).chat.completions.create(
-            model=GEMINI_MODEL, reasoning_effort="low", max_tokens=200,
-            messages=[{"role": "user", "content": "Ütle ainult: tere"}])
-        print(f"selftest: openai route ok in {_ms(t0)} ms reply={c.choices[0].message.content!r}", flush=True)
-    except Exception as e:
-        print(f"selftest: openai route FAILED after {_ms(t0)} ms {e!r}", flush=True)
+    # Tiny question to each Gemini model, the same way the chat calls it
+    for model in GEMINI_MODELS:
+        t0 = time.perf_counter()
+        try:
+            c = OpenAI(api_key=key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                       timeout=20, max_retries=0).chat.completions.create(
+                model=model, reasoning_effort="medium", max_tokens=1024,
+                messages=[{"role": "user", "content": "Ütle ainult: tere"}])
+            print(f"selftest: {model} ok in {_ms(t0)} ms reply={c.choices[0].message.content!r}", flush=True)
+        except Exception as e:
+            print(f"selftest: {model} FAILED after {_ms(t0)} ms {str(e)[:200]!r}", flush=True)
 
 
 async def _selftest_voice() -> None:
