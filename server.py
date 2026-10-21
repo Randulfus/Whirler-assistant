@@ -206,18 +206,33 @@ async def home():
         return f.read()
 
 
+# The full Whisper model is clearly more accurate than "turbo" for smaller
+# languages like Estonian, at almost the same speed.
+WHISPER_MODEL = "whisper-large-v3"
+
+# Hints so Whisper spells the names and words recruiters actually use.
+WHISPER_HINTS = {
+    None: "Randolf Alt, Randolf, EBS, Stora Enso, Paide Arst, Rand-Dolf, Power BI.",
+    "en": "Questions about Randolf Alt: his experience, bonds, internship, Stora Enso, EBS, Paide Arst, Rand-Dolf, Power BI.",
+    "et": "Küsimused Randolf Alti kohta. Mis on Randolfi kogemus? Räägi Randolfist. Võlakirjad, praktika, "
+          "töökogemus, Stora Enso, EBS, Paide Arst, Rand-Dolf, Power BI, millal ta saaks tööle tulla?",
+}
+
+
 def whisper(audio_bytes: bytes, language: Optional[str] = None):
     params = {
         "file": ("recording.webm", audio_bytes),
-        "model": "whisper-large-v3-turbo",
+        "model": WHISPER_MODEL,
         "response_format": "verbose_json",
+        "prompt": WHISPER_HINTS[language],
+        "temperature": 0,
     }
     if language:
         params["language"] = language
     return client.audio.transcriptions.create(**params)
 
 
-# Whisper Large V3 Turbo via Groq.
+# Whisper Large V3 via Groq.
 # Visitors speak either English or Estonian, so:
 # - ET selected on the page -> always transcribe as Estonian.
 # - EN selected -> let Whisper guess; anything it hears that is not English
