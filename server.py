@@ -178,15 +178,20 @@ def generate_reply(messages: list, lang: str) -> tuple[str, str]:
     """Ask Gemini first; fall back to Groq if Gemini is missing or fails. Returns (text, model used)."""
     if gemini:
         try:
+            t0 = time.perf_counter()
             completion = gemini.chat.completions.create(
                 model=GEMINI_MODEL,
                 messages=messages,
-                temperature=0.7,
+                # Google: keep Gemini 3 at its default temperature (1.0);
+                # lower values can make it loop and never finish.
+                # Same thinking level as the AI Studio test that answered well.
+                reasoning_effort="medium",
                 # Gemini counts its thinking in this limit too, so it is set high;
                 # the replies themselves stay 1-3 sentences because of the prompt.
                 max_tokens=4096,
             )
             text = (completion.choices[0].message.content or "").strip()
+            print(f"gemini answered in {round((time.perf_counter() - t0) * 1000)} ms", flush=True)
             if text:
                 return text, GEMINI_MODEL
         except Exception as e:
