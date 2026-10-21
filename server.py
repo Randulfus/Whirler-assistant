@@ -79,7 +79,8 @@ SUPPORTED_LANGS = ("en", "et")
 # ---------- AI models ----------
 # Main brain: Google Gemini (free tier from Google AI Studio), strong in both English and Estonian.
 GEMINI_MODEL = "gemini-3.8-flash"
-gemini_key = os.getenv("GEMINI_API_KEY", "")
+gemini_key_raw = os.getenv("GEMINI_API_KEY", "")
+gemini_key = gemini_key_raw.strip()  # ignore stray spaces from copy-paste
 gemini = OpenAI(
     api_key=gemini_key,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -204,6 +205,76 @@ def generate_reply(messages: list, lang: str) -> tuple[str, str]:
         max_tokens=800,
     )
     return (completion.choices[0].message.content or "").strip(), BACKUP_MODELS[lang]
+
+
+# ---------- Startup self-test (diagnostics only, writes timings to the log) ----------
+
+def _ms(t0: float) -> int:
+    return round((time.perf_counter() - t0) * 1000)
+
+
+def _selftest_gemini() -> None:
+    import socket
+    import httpx
+
+    key = gemini_key.strip()
+    print(f"selftest: GEMINI_API_KEY set={bool(key)} length={len(key)} "
+          f"starts_with_AIza={key.startswith('AIza')} had_spaces={gemini_key_raw != gemini_key}", flush=True)
+    if not key:
+        return
+
+    t0 = time.perf_counter()
+    try:
+        socket.getaddrinfo("generativelanguage.googleapis.com", 443)
+        print(f"selftest: DNS google ok in {_ms(t0)} ms", flush=True)
+    except Exception as e:
+        print(f"selftest: DNS google FAILED {e!r}", flush=True)
+
+    # 1) Google's own API, tiny question, low thinking
+    t0 = time.perf_counter()
+    try:
+        r = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            headers={"x-goog-api-key": key},
+            json={"contents": [{"parts": [{"text": "Ütle ainult: tere"}]}],
+                  "generationConfig": {"thinkingConfig": {"thinkingLevel": "low"}}},
+            timeout=40,
+        )
+        print(f"selftest: native API status={r.status_code} in {_ms(t0)} ms body={r.text[:300]!r}", flush=True)
+    except Exception as e:
+        print(f"selftest: native API FAILED after {_ms(t0)} ms {e!r}", flush=True)
+
+    # 2) The OpenAI-compatible route the chat uses
+    t0 = time.perf_counter()
+    try:
+        c = OpenAI(api_key=key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                   timeout=40, max_retries=0).chat.completions.create(
+            model=GEMINI_MODEL, reasoning_effort="low", max_tokens=200,
+            messages=[{"role": "user", "content": "Ütle ainult: tere"}])
+        print(f"selftest: openai route ok in {_ms(t0)} ms reply={c.choices[0].message.content!r}", flush=True)
+    except Exception as e:
+        print(f"selftest: openai route FAILED after {_ms(t0)} ms {e!r}", flush=True)
+
+
+async def _selftest_voice() -> None:
+    for lang, text in (("en", "Hello, this is a short test."), ("et", "Tere, see on lühike test.")):
+        t0 = time.perf_counter()
+        try:
+            size = 0
+            async for chunk in edge_tts.Communicate(text, VOICES[lang]).stream():
+                if chunk["type"] == "audio":
+                    size += len(chunk["data"])
+            print(f"selftest: voice {lang} {size} bytes in {_ms(t0)} ms", flush=True)
+        except Exception as e:
+            print(f"selftest: voice {lang} FAILED after {_ms(t0)} ms {e!r}", flush=True)
+
+
+@app.on_event("startup")
+async def _run_selftest() -> None:
+    async def run():
+        await asyncio.to_thread(_selftest_gemini)
+        await _selftest_voice()
+    asyncio.create_task(run())
 
 
 # ---------- Routes ----------
