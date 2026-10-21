@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import asyncio
 import base64
 from typing import Optional
 
@@ -82,10 +83,12 @@ gemini_key = os.getenv("GEMINI_API_KEY", "")
 gemini = OpenAI(
     api_key=gemini_key,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    timeout=25,      # never wait longer than this; Groq takes over instead
+    max_retries=0,
 ) if gemini_key else None
 
 # Groq: speech-to-text (Whisper) and a backup brain if Gemini is unavailable.
-client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+client = Groq(api_key=os.getenv("GROQ_API_KEY", ""), timeout=30, max_retries=1)
 BACKUP_MODELS = {
     "en": "openai/gpt-oss-20b",
     "et": "openai/gpt-oss-120b",
@@ -243,11 +246,11 @@ async def transcribe_audio(req: AudioTranscribeRequest):
     ui_lang = req.ui_lang if req.ui_lang in SUPPORTED_LANGS else "en"
 
     if ui_lang == "et":
-        result = whisper(audio_bytes, language="et")
+        result = await asyncio.to_thread(whisper, audio_bytes, "et")
         print("transcribe: ui=et -> forced et", flush=True)
         return {"text": result.text.strip(), "lang": "et"}
 
-    result = whisper(audio_bytes)
+    result = await asyncio.to_thread(whisper, audio_bytes)
     raw_lang = getattr(result, "language", None) or (getattr(result, "model_extra", None) or {}).get("language")
     detected = normalize_lang(raw_lang)
     text = result.text.strip()
@@ -259,7 +262,7 @@ async def transcribe_audio(req: AudioTranscribeRequest):
         detected = "et"
 
     if detected == "et" and normalize_lang(raw_lang) != "et":
-        result = whisper(audio_bytes, language="et")
+        result = await asyncio.to_thread(whisper, audio_bytes, "et")
         text = result.text.strip()
 
     print(f"transcribe: ui=en whisper_said={raw_lang!r} -> {detected}", flush=True)
@@ -279,7 +282,8 @@ async def chat(req: ChatRequest):
     messages.append({"role": "user", "content": req.message})
 
     t0 = time.perf_counter()
-    reply_text, model_used = generate_reply(messages, reply_lang)
+    # Run the AI call in a background thread so a slow answer never freezes the whole site.
+    reply_text, model_used = await asyncio.to_thread(generate_reply, messages, reply_lang)
     t1 = time.perf_counter()
 
     if not reply_text:
