@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import base64
 from typing import Optional
 
@@ -8,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import edge_tts
 from groq import Groq
+from openai import OpenAI
 
 WHIRL_SYSTEM_PROMPT = """
 You are Whirl, Randolf Alt's personal voice assistant.
@@ -18,20 +20,24 @@ Persona:
 - Speak conversationally and concisely (1–3 sentences per turn) so your voice sounds natural when spoken out loud. Avoid bullet points, symbols, or asterisks.
 - Do NOT repeat "Hello, I am Randolf's assistant..." in your replies. Jump straight into answering the recruiter's questions directly.
 
+Accuracy:
+- Only state facts that are written in this profile. Do not combine separate facts into new claims, and do not invent details, numbers, dates or tasks.
+- If you are asked something the profile does not cover, say you don't have that detail and suggest contacting Randolf directly.
+
 Core Profile & Pitch for Recruiters:
 - Randolf is an International Business Administration student at Estonian Business School (EBS), graduating 2027, specializing in Finance & Accounting.
 - Looking for: A part-time internship or role in Tallinn with a schedule compatible with his studies (available through August 2027 and open to long-term growth).
-- Target fields: Banking, financial services, fund/depo services (NAV calculation, investment restriction compliance, fee control), asset management, corporate finance, or accounting.
+- Target fields: Banking, financial services, fund/depo services (NAV calculation, investment restriction compliance, fee control), asset management, corporate finance, or accounting. These are fields he wants to work in, not tasks he has already done.
 - Contact info: altrandolf@gmail.com, +372 5077 923, Tallinn.
 
 Hands-on Financial & Investment Experience:
-- Corporate Portfolio Management (Paide Arst OÜ, ~€100,000): Manages and diversifies company funds across 12 Baltic bond issuers (including LHV Group, Bigbank, Inbank, Coop Pank, Eesti Energia, and Summus Capital). Calculates monthly market value, performance, and coupon accruals; reconciles payments with bank statements; analyzes issue terms and risks for subordinated bonds.
+- Corporate Portfolio Management (Paide Arst OÜ, ~€100,000): Manages and diversifies company funds across 12 Baltic bond issuers (including LHV Group, Bigbank, Inbank, Coop Pank, Eesti Energia, and Summus Capital). Calculates monthly market value, performance, and coupon accruals; reconciles payments with bank statements (checks that received coupon payments match the bank statement); analyzes issue terms and risks for subordinated bonds.
 - Personal Investing (since age 14): UCITS ETF portfolio, equity DCF valuation models, and macroeconomic/market monitoring.
 - Academic Modeling (EBS): DCF valuations (Apple, Nike, Lennox International), bond valuation (bootstrapping), and Private Equity/Venture Capital research on the Livonia Partners and Thermory deal.
 
 Operational & Business Experience:
 - Entrepreneur (Rand-Dolf OÜ, Founder & Board Member): Manages short- and long-term rentals; handles VAT-taxable vs. exempt rental income and annual reporting; automated billing workflows using AI tools; grew rental turnover ~57% (from €7,000 to €11,000).
-- Logistics Specialist Intern (Stora Enso Biomaterials/Pulp Export): Coordinated international ocean container exports via Kotka and Gävle ports. Handled InfoNexus, Oracle OTM, and Power BI reporting. Verified Bills of Lading where precision is mission-critical; authored the operational analysis "From Booking to Delivery".
+- Logistics Specialist Intern (Stora Enso Biomaterials/Pulp Export): Coordinated international ocean container exports shipped out of two separate export ports, Kotka (Finland) and Gävle (Sweden). Never describe this as shipping "from Kotka to Gävle" or any route between the two. Handled InfoNexus, Oracle OTM, and Power BI reporting. Verified Bills of Lading where precision is mission-critical; authored the operational analysis "From Booking to Delivery".
 - Tech & IT (Paide Arst OÜ & Power Up Technologies): Manages WordPress websites, resolves daily IT issues, and researched EU cross-border regulations for hydrogen transport.
 
 Key Differentiators & Hobbies:
@@ -55,13 +61,32 @@ LANGUAGE: Reply in Estonian (eesti keel) only, even if earlier turns in the conv
 - Address the recruiter politely with "Teie" / "Te".
 - Inflect names correctly (Randolf, Randolfi, Randolfile, Randolfil, Randolfiga).
 - Keep company, school and software names unchanged (Stora Enso, EBS, Paide Arst OÜ, Rand-Dolf OÜ, Power BI, Oracle OTM, InfoNexus).
-- Use standard Estonian finance terms, e.g. võlakirjad, kupongimaksed, puhasväärtus (NAV), rahavoogude diskonteerimise mudel (DCF), raamatupidamine, käibemaks, majandusaasta aruanne, praktika, osalise tööajaga töö.
 - Write amounts the Estonian way, e.g. "umbes 100 000 eurot", "7000 eurolt 11 000 eurole".
+- Use these Estonian terms:
+  bonds = võlakirjad; bond issuers = võlakirjade emitendid; subordinated bonds = allutatud võlakirjad;
+  coupon payments = kupongimaksed; coupon accruals = kogunenud kupongiintress; market value = turuväärtus;
+  reconciles payments with bank statements = võrdleb laekunud makseid pangaväljavõtetega (never "rekonstrueerib");
+  NAV calculation = puhasväärtuse (NAV) arvutamine; fee control = tasude kontroll;
+  DCF valuation = diskonteeritud rahavoogude (DCF) hindamine; annual report = majandusaasta aruanne;
+  VAT = käibemaks; Bill of Lading = konossement; container exports = konteinerite eksport;
+  internship = praktika; part-time = osalise tööajaga.
 """,
 }
 
-# Models: the 20b model is fastest, the 120b model writes much better Estonian.
-MODELS = {
+SUPPORTED_LANGS = ("en", "et")
+
+# ---------- AI models ----------
+# Main brain: Google Gemini (free tier from Google AI Studio), strong in both English and Estonian.
+GEMINI_MODEL = "gemini-3.8-flash"
+gemini_key = os.getenv("GEMINI_API_KEY", "")
+gemini = OpenAI(
+    api_key=gemini_key,
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+) if gemini_key else None
+
+# Groq: speech-to-text (Whisper) and a backup brain if Gemini is unavailable.
+client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+BACKUP_MODELS = {
     "en": "openai/gpt-oss-20b",
     "et": "openai/gpt-oss-120b",
 }
@@ -72,10 +97,7 @@ VOICES = {
     "et": "et-EE-AnuNeural",
 }
 
-SUPPORTED_LANGS = ("en", "et")
-
 app = FastAPI()
-client = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
 
 
 class ChatRequest(BaseModel):
@@ -149,6 +171,33 @@ def extract_whisper_language(transcription) -> Optional[str]:
     return normalize_lang(lang)
 
 
+def generate_reply(messages: list, lang: str) -> tuple[str, str]:
+    """Ask Gemini first; fall back to Groq if Gemini is missing or fails. Returns (text, model used)."""
+    if gemini:
+        try:
+            completion = gemini.chat.completions.create(
+                model=GEMINI_MODEL,
+                messages=messages,
+                temperature=0.7,
+                # Gemini counts its thinking in this limit too, so it is set high;
+                # the replies themselves stay 1-3 sentences because of the prompt.
+                max_tokens=4096,
+            )
+            text = (completion.choices[0].message.content or "").strip()
+            if text:
+                return text, GEMINI_MODEL
+        except Exception as e:
+            print(f"Gemini failed, using Groq backup: {e!r}", flush=True)
+
+    completion = client.chat.completions.create(
+        model=BACKUP_MODELS[lang],
+        messages=messages,
+        temperature=0.7,
+        max_tokens=800,
+    )
+    return (completion.choices[0].message.content or "").strip(), BACKUP_MODELS[lang]
+
+
 # ---------- Routes ----------
 
 @app.get("/", response_class=HTMLResponse)
@@ -157,33 +206,48 @@ async def home():
         return f.read()
 
 
-# Whisper Large V3 Turbo via Groq, with automatic English/Estonian detection
+def whisper(audio_bytes: bytes, language: Optional[str] = None):
+    params = {
+        "file": ("recording.webm", audio_bytes),
+        "model": "whisper-large-v3-turbo",
+        "response_format": "verbose_json",
+    }
+    if language:
+        params["language"] = language
+    return client.audio.transcriptions.create(**params)
+
+
+# Whisper Large V3 Turbo via Groq.
+# Visitors speak either English or Estonian, so:
+# - ET selected on the page -> always transcribe as Estonian.
+# - EN selected -> let Whisper guess; anything it hears that is not English
+#   (it often mistakes Estonian for Finnish) is transcribed again as Estonian.
 @app.post("/transcribe")
 async def transcribe_audio(req: AudioTranscribeRequest):
     audio_bytes = base64.b64decode(req.audio_base64)
     ui_lang = req.ui_lang if req.ui_lang in SUPPORTED_LANGS else "en"
 
-    # First pass: let Whisper detect the language itself.
-    transcription = client.audio.transcriptions.create(
-        file=("recording.webm", audio_bytes),
-        model="whisper-large-v3-turbo",
-        response_format="verbose_json",
-    )
-    detected = extract_whisper_language(transcription)
-    text = transcription.text.strip()
+    if ui_lang == "et":
+        result = whisper(audio_bytes, language="et")
+        print("transcribe: ui=et -> forced et", flush=True)
+        return {"text": result.text.strip(), "lang": "et"}
 
-    # Short Estonian clips are sometimes mistaken for Finnish or another language.
-    # If Whisper picked anything other than English/Estonian, redo it in the language selected on the page.
-    if detected is None:
-        transcription = client.audio.transcriptions.create(
-            file=("recording.webm", audio_bytes),
-            model="whisper-large-v3-turbo",
-            response_format="json",
-            language=ui_lang,
-        )
-        text = transcription.text.strip()
-        detected = ui_lang
+    result = whisper(audio_bytes)
+    raw_lang = getattr(result, "language", None) or (getattr(result, "model_extra", None) or {}).get("language")
+    detected = normalize_lang(raw_lang)
+    text = result.text.strip()
 
+    if detected is None and raw_lang is None:
+        # Whisper gave no language at all: judge by the words instead.
+        detected = detect_lang(text, fallback="en")
+    elif detected != "en":
+        detected = "et"
+
+    if detected == "et" and normalize_lang(raw_lang) != "et":
+        result = whisper(audio_bytes, language="et")
+        text = result.text.strip()
+
+    print(f"transcribe: ui=en whisper_said={raw_lang!r} -> {detected}", flush=True)
     return {"text": text, "lang": detected}
 
 
@@ -199,15 +263,10 @@ async def chat(req: ChatRequest):
         messages.append({"role": turn.get("role", "user"), "content": turn.get("content", "")})
     messages.append({"role": "user", "content": req.message})
 
-    completion = client.chat.completions.create(
-        model=MODELS[reply_lang],
-        messages=messages,
-        temperature=0.7,
-        # gpt-oss spends part of this budget on hidden reasoning, and Estonian needs
-        # more tokens than English for the same sentence, so 400 could cut replies short.
-        max_tokens=800,
-    )
-    reply_text = (completion.choices[0].message.content or "").strip()
+    t0 = time.perf_counter()
+    reply_text, model_used = generate_reply(messages, reply_lang)
+    t1 = time.perf_counter()
+
     if not reply_text:
         reply_text = (
             "Vabandust, ma ei saanud sellele praegu vastata. Kas saaksite küsimust korrata?"
@@ -221,10 +280,15 @@ async def chat(req: ChatRequest):
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             audio_data += chunk["data"]
+    t2 = time.perf_counter()
+
+    timings = {"model": model_used, "llm_ms": round((t1 - t0) * 1000), "voice_ms": round((t2 - t1) * 1000)}
+    print(f"chat lang={reply_lang} {timings}", flush=True)
 
     b64_audio = base64.b64encode(audio_data).decode("utf-8")
     return JSONResponse({
         "reply": reply_text,
         "lang": reply_lang,
+        "timings": timings,
         "audio": f"data:audio/mp3;base64,{b64_audio}",
     })
